@@ -131,7 +131,6 @@ tree = app_commands.CommandTree(bot)
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"Using Apps Script Web App: {APPS_SCRIPT_WEB_APP_URL}")
     print("───" * 14)
 
     try:
@@ -826,39 +825,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   12. Debug Command
-# ────────────────────────────────────────────────
-@tree.command(name="debugtest", description="Debug Apps Script connection")
-async def debug_test_command(interaction: discord.Interaction):
-    if not any(role.id == APPROVER_ROLE_ID for role in interaction.user.roles):
-        await interaction.response.send_message("Only approvers can run debug.", ephemeral=True)
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    test_url = APPS_SCRIPT_WEB_APP_URL + "?function=test"
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(test_url) as response:
-                status = response.status
-                text = await response.text()
-                
-                embed = discord.Embed(
-                    title="🔧 Debug Test Results",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(name="URL", value=test_url[:100] + "..." if len(test_url) > 100 else test_url, inline=False)
-                embed.add_field(name="Status Code", value=str(status), inline=True)
-                embed.add_field(name="Response", value=text[:500] + "..." if len(text) > 500 else text, inline=False)
-                
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                
-    except Exception as e:
-        await interaction.followup.send(f"❌ Debug test failed: {str(e)}", ephemeral=True)
-
-# ────────────────────────────────────────────────
-#   13. Run
+#   12. Run
 # ────────────────────────────────────────────────
 async def main():
     async with bot:
