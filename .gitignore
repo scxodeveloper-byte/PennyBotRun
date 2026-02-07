@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.env
+.env.local
+.env.production
+
+# Secrets
+secrets.json
+credentials.json
+token.pickle
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
