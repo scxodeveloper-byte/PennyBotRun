@@ -18,7 +18,7 @@ TARGET_ROLE_2_ID     = 935023208946606081
 APPROVAL_CHANNEL_ID  = 1468197242186764381
 
 # Apps Script Web App URL
-APPS_SCRIPT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzDj_eSAUDy2ivK78fGccfRSPXCaUJLkXpAyOT1qs-ZPYo2hYPt6vfjiavCSjcJ8ifU/exec"
+APPS_SCRIPT_WEB_APP_URL = ""
 
 # ────────────────────────────────────────────────
 #   1. Load token securely
