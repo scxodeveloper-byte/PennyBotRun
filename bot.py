@@ -17,6 +17,36 @@ TARGET_ROLE_1_ID     = 1332058188933103677
 TARGET_ROLE_2_ID     = 935023208946606081
 APPROVAL_CHANNEL_ID  = 1468197242186764381
 
+# Role IDs for hourly management (ADDED)
+HOURLY_CHECK_ROLE_ID = 959996960834748416  # If someone has this role
+
+# Roles to add if they don't have them (when they have HOURLY_CHECK_ROLE_ID) (ADDED)
+ROLES_TO_ADD = [
+    1467443766423064641,
+    1467443606028816502,
+    1467443960996958219,
+    1467452194960707697,
+    1467452045132038284,
+    1467450300242595840,
+    1467444038645841941,
+    1467444148540932179,
+    1467444235853762714
+]
+
+# Roles that should remove all the above roles + HOURLY_CHECK_ROLE_ID (ADDED)
+ROLES_THAT_REMOVE = [
+    1332058188933103677,
+    935023208946606081,
+    1433102554840957010,
+    1332058285817466971,
+    1331957308703375401
+]
+
+# Special case roles that add another role (ADDED)
+SPECIAL_ROLE_1 = 1331826865744248892
+SPECIAL_ROLE_2 = 959997171648835594
+SPECIAL_ROLE_TO_ADD = 1467443465041477764
+
 # Apps Script Web App URL
 APPS_SCRIPT_WEB_APP_URL = ""
 
@@ -126,7 +156,132 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # ────────────────────────────────────────────────
-#   4. Ready event + command sync
+#   4. Hourly Role Management Task (ADDED)
+# ────────────────────────────────────────────────
+async def hourly_role_management():
+    """Check every hour and manage roles based on criteria"""
+    await bot.wait_until_ready()
+    
+    while not bot.is_closed():
+        try:
+            print(f"🕐 [{datetime.now()}] Starting hourly role check...")
+            
+            for guild in bot.guilds:
+                try:
+                    # Get all members
+                    members = []
+                    async for member in guild.fetch_members(limit=None):
+                        members.append(member)
+                    
+                    print(f"👥 Checking {len(members)} members in {guild.name}")
+                    
+                    processed_count = 0
+                    for member in members:
+                        try:
+                            # Get member's role IDs
+                            member_role_ids = [role.id for role in member.roles]
+                            
+                            # Check if member has HOURLY_CHECK_ROLE_ID
+                            has_hourly_check_role = HOURLY_CHECK_ROLE_ID in member_role_ids
+                            
+                            # Check if member has any of the ROLES_THAT_REMOVE
+                            has_remove_trigger_role = any(role_id in member_role_ids for role_id in ROLES_THAT_REMOVE)
+                            
+                            # FIRST: Handle removal case (highest priority)
+                            if has_remove_trigger_role:
+                                # Remove all ROLES_TO_ADD + HOURLY_CHECK_ROLE_ID
+                                roles_to_remove = []
+                                
+                                # Check which roles to remove
+                                for role_id in ROLES_TO_ADD + [HOURLY_CHECK_ROLE_ID]:
+                                    if role_id in member_role_ids:
+                                        role = guild.get_role(role_id)
+                                        if role:
+                                            roles_to_remove.append(role)
+                                
+                                # Remove roles if needed
+                                if roles_to_remove:
+                                    try:
+                                        await member.remove_roles(*roles_to_remove, reason="Hourly role cleanup: Has removal-trigger role")
+                                        print(f"  🔄 Removed {len(roles_to_remove)} roles from {member.display_name} (has removal-trigger role)")
+                                    except discord.Forbidden:
+                                        print(f"  ❌ No permission to remove roles from {member.display_name}")
+                                    except discord.HTTPException as e:
+                                        print(f"  ❌ Error removing roles from {member.display_name}: {e}")
+                                
+                                processed_count += 1
+                                continue  # Skip to next member
+                            
+                            # SECOND: Handle addition case
+                            if has_hourly_check_role:
+                                # Add missing roles from ROLES_TO_ADD
+                                roles_to_add = []
+                                
+                                # Check which roles are missing
+                                for role_id in ROLES_TO_ADD:
+                                    if role_id not in member_role_ids:
+                                        role = guild.get_role(role_id)
+                                        if role:
+                                            roles_to_add.append(role)
+                                
+                                # Add missing roles if needed
+                                if roles_to_add:
+                                    try:
+                                        await member.add_roles(*roles_to_add, reason="Hourly role assignment: Has hourly-check role")
+                                        print(f"  🔄 Added {len(roles_to_add)} roles to {member.display_name}")
+                                    except discord.Forbidden:
+                                        print(f"  ❌ No permission to add roles to {member.display_name}")
+                                    except discord.HTTPException as e:
+                                        print(f"  ❌ Error adding roles to {member.display_name}: {e}")
+                                
+                                processed_count += 1
+                            
+                            # THIRD: Handle special case roles
+                            has_special_role = (SPECIAL_ROLE_1 in member_role_ids) or (SPECIAL_ROLE_2 in member_role_ids)
+                            special_role = guild.get_role(SPECIAL_ROLE_TO_ADD)
+                            
+                            if has_special_role and special_role:
+                                # Add SPECIAL_ROLE_TO_ADD if not already there
+                                if SPECIAL_ROLE_TO_ADD not in member_role_ids:
+                                    try:
+                                        await member.add_roles(special_role, reason="Hourly role assignment: Has special role")
+                                        print(f"  ⭐ Added special role to {member.display_name}")
+                                    except discord.Forbidden:
+                                        print(f"  ❌ No permission to add special role to {member.display_name}")
+                                    except discord.HTTPException as e:
+                                        print(f"  ❌ Error adding special role to {member.display_name}: {e}")
+                                processed_count += 1
+                            elif special_role and SPECIAL_ROLE_TO_ADD in member_role_ids:
+                                # Remove SPECIAL_ROLE_TO_ADD if they have it but shouldn't
+                                try:
+                                    await member.remove_roles(special_role, reason="Hourly role cleanup: No longer has special role")
+                                    print(f"  ⭐ Removed special role from {member.display_name}")
+                                except discord.Forbidden:
+                                    print(f"  ❌ No permission to remove special role from {member.display_name}")
+                                except discord.HTTPException as e:
+                                    print(f"  ❌ Error removing special role from {member.display_name}: {e}")
+                                processed_count += 1
+                                
+                        except Exception as e:
+                            print(f"  ⚠️ Error processing {member.display_name}: {e}")
+                            continue
+                    
+                    print(f"✅ Completed hourly check for {guild.name}: Processed {processed_count} members")
+                    
+                except Exception as e:
+                    print(f"⚠️ Error processing guild {guild.name}: {e}")
+                    continue
+            
+            print(f"🕐 [{datetime.now()}] Hourly role check completed. Waiting 1 hour...")
+            
+        except Exception as e:
+            print(f"💥 Critical error in hourly_role_management: {e}")
+        
+        # Wait 1 hour (3600 seconds) before next check
+        await asyncio.sleep(3600)
+
+# ────────────────────────────────────────────────
+#   5. Ready event + command sync + start background task (MODIFIED)
 # ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -138,9 +293,13 @@ async def on_ready():
         print(f"Synced {len(synced)} command(s) globally")
     except Exception as e:
         print(f"Sync failed: {e}")
+    
+    # Start the hourly role management task (ADDED)
+    bot.loop.create_task(hourly_role_management())
+    print("⏰ Started hourly role management task")
 
 # ────────────────────────────────────────────────
-#   5. Discharge Modal (WITH ROLE HIERARCHY CHECK)
+#   6. Discharge Modal (WITH ROLE HIERARCHY CHECK)
 # ────────────────────────────────────────────────
 class DischargeModal(ui.Modal, title="Discharge Request"):
     user_ids = ui.TextInput(
@@ -258,7 +417,7 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
         await interaction.response.send_message("Request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   6. Discharge Approval View
+#   7. Discharge Approval View
 # ────────────────────────────────────────────────
 class DischargeApprovalView(ui.View):
     def __init__(self, targets: list[discord.Member], reason: str):
@@ -322,7 +481,7 @@ class DischargeApprovalView(ui.View):
         await interaction.response.send_message("Request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   7. Medal Award Modal (FIXED with defer)
+#   8. Medal Award Modal (FIXED with defer)
 # ────────────────────────────────────────────────
 class MedalAwardModal(ui.Modal, title="Medal Award Request"):
     user_ids = ui.TextInput(
@@ -418,7 +577,7 @@ class MedalAwardModal(ui.Modal, title="Medal Award Request"):
         await interaction.followup.send("Medal award request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   8. Medal Removal Modal (FIXED with defer)
+#   9. Medal Removal Modal (FIXED with defer)
 # ────────────────────────────────────────────────
 class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
     user_ids = ui.TextInput(
@@ -505,7 +664,7 @@ class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
         await interaction.followup.send("Medal removal request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   9. Medal Approval View
+#   10. Medal Approval View
 # ────────────────────────────────────────────────
 class MedalApprovalView(ui.View):
     def __init__(self, targets: list[discord.Member], medal_name: str, reason: str, is_award: bool):
@@ -569,7 +728,7 @@ class MedalApprovalView(ui.View):
         await interaction.response.send_message("Medal request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   10. New Medal Management Modals (FIXED)
+#   11. New Medal Management Modals (FIXED)
 # ────────────────────────────────────────────────
 class AddMedalModal(ui.Modal, title="Add New Medal Type"):
     medal_name = ui.TextInput(
@@ -649,7 +808,7 @@ class DeleteMedalModal(ui.Modal, title="Delete Medal Type"):
             await interaction.followup.send(f"❌ Exception: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   11. Commands
+#   12. Commands
 # ────────────────────────────────────────────────
 @tree.command(name="d", description="Request discharge of members (requires approval)")
 @app_commands.default_permissions(manage_roles=True)
@@ -825,7 +984,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   12. Run
+#   13. Run
 # ────────────────────────────────────────────────
 async def main():
     async with bot:
