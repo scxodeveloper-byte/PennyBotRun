@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import aiohttp
 from typing import List, Dict, Optional
+import keep_alive
 
 # ────────────────────────────────────────────────
 #   Constants
@@ -991,4 +992,5 @@ async def main():
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
+    keep_alive.keep_alive()  # ADD THIS LINE
     asyncio.run(main())
