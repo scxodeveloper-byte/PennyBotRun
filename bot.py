@@ -7,6 +7,23 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import aiohttp
 from typing import List, Dict, Optional
+import logging
+import random
+import time
+from discord.errors import HTTPException, RateLimited
+import sys
+
+# ────────────────────────────────────────────────
+#   Setup Logging
+# ────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger('discord_bot')
 
 # ────────────────────────────────────────────────
 #   Constants
@@ -51,6 +68,79 @@ SPECIAL_ROLE_TO_ADD = 1467443465041477764
 APPS_SCRIPT_WEB_APP_URL = ""
 
 # ────────────────────────────────────────────────
+#   Connection Manager Class (NEW)
+# ────────────────────────────────────────────────
+class ConnectionManager:
+    def __init__(self):
+        self.last_connect_attempt = 0
+        self.min_connect_interval = 300  # 5 minutes minimum between connections
+        self.consecutive_failures = 0
+        self.max_consecutive_failures = 5
+        self.base_delay = 60  # Base delay for exponential backoff
+        
+    async def connect_with_backoff(self, bot, token):
+        """Connect to Discord with exponential backoff and rate limit handling"""
+        
+        while self.consecutive_failures < self.max_consecutive_failures:
+            try:
+                # Check if we're connecting too frequently
+                current_time = time.time()
+                time_since_last = current_time - self.last_connect_attempt
+                
+                if time_since_last < self.min_connect_interval and self.last_connect_attempt > 0:
+                    wait_time = self.min_connect_interval - time_since_last
+                    logger.info(f"⏱️ Throttling connection. Waiting {wait_time:.0f} seconds...")
+                    await asyncio.sleep(wait_time)
+                
+                # Add jitter to avoid thundering herd problem
+                jitter = random.uniform(0, 5)
+                if jitter > 0:
+                    await asyncio.sleep(jitter)
+                
+                self.last_connect_attempt = time.time()
+                await bot.start(token)
+                
+                # If we get here, connection was successful
+                self.consecutive_failures = 0
+                logger.info("✅ Successfully connected to Discord")
+                return True
+                
+            except (HTTPException, RateLimited) as e:
+                self.consecutive_failures += 1
+                
+                # Calculate wait time with exponential backoff
+                wait_time = self.base_delay * (2 ** (self.consecutive_failures - 1))
+                wait_time = min(wait_time, 3600)  # Cap at 1 hour
+                
+                # Add jitter
+                wait_time += random.uniform(0, 10)
+                
+                logger.warning(f"⚠️ Rate limited! Attempt {self.consecutive_failures}/{self.max_consecutive_failures}")
+                logger.warning(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
+                
+                if hasattr(e, 'retry_after'):
+                    logger.info(f"Discord suggests waiting {e.retry_after} seconds")
+                    wait_time = max(wait_time, e.retry_after)
+                
+                await asyncio.sleep(wait_time)
+                
+            except Exception as e:
+                self.consecutive_failures += 1
+                logger.error(f"💥 Unexpected error connecting: {e}")
+                
+                wait_time = self.base_delay * (2 ** (self.consecutive_failures - 1))
+                wait_time = min(wait_time, 3600)
+                
+                logger.info(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
+                await asyncio.sleep(wait_time)
+        
+        logger.critical("❌ Max retries reached. Could not connect to Discord.")
+        return False
+
+# Create global connection manager
+conn_manager = ConnectionManager()
+
+# ────────────────────────────────────────────────
 #   1. Load token securely
 # ────────────────────────────────────────────────
 load_dotenv()
@@ -74,23 +164,23 @@ async def call_apps_script(function_name: str, data: dict = None):
             if data:
                 params.update(data)
             
-            print(f"📡 Calling Apps Script: {function_name} with params: {params}")
+            logger.info(f"📡 Calling Apps Script: {function_name}")
             
             async with session.get(APPS_SCRIPT_WEB_APP_URL, params=params) as response:
                 response_text = await response.text()
-                print(f"📡 Response: {response.status} - {response_text[:200]}...")
+                logger.debug(f"📡 Response: {response.status}")
                 
                 if response.status == 200:
                     try:
                         return json.loads(response_text)
                     except json.JSONDecodeError:
-                        print(f"⚠️ Failed to parse JSON: {response_text}")
+                        logger.error(f"⚠️ Failed to parse JSON")
                         return None
                 else:
-                    print(f"❌ Error calling {function_name}: {response.status}")
+                    logger.error(f"❌ Error calling {function_name}: {response.status}")
                     return None
     except Exception as e:
-        print(f"💥 Exception calling Apps Script: {e}")
+        logger.error(f"💥 Exception calling Apps Script: {e}")
         return None
 
 async def find_user_row(user_id: str) -> Optional[int]:
@@ -164,7 +254,7 @@ async def hourly_role_management():
     
     while not bot.is_closed():
         try:
-            print(f"🕐 [{datetime.now()}] Starting hourly role check...")
+            logger.info(f"🕐 Starting hourly role check...")
             
             for guild in bot.guilds:
                 try:
@@ -173,7 +263,7 @@ async def hourly_role_management():
                     async for member in guild.fetch_members(limit=None):
                         members.append(member)
                     
-                    print(f"👥 Checking {len(members)} members in {guild.name}")
+                    logger.info(f"👥 Checking {len(members)} members in {guild.name}")
                     
                     processed_count = 0
                     for member in members:
@@ -203,11 +293,11 @@ async def hourly_role_management():
                                 if roles_to_remove:
                                     try:
                                         await member.remove_roles(*roles_to_remove, reason="Hourly role cleanup: Has removal-trigger role")
-                                        print(f"  🔄 Removed {len(roles_to_remove)} roles from {member.display_name} (has removal-trigger role)")
+                                        logger.info(f"  🔄 Removed {len(roles_to_remove)} roles from {member.display_name}")
                                     except discord.Forbidden:
-                                        print(f"  ❌ No permission to remove roles from {member.display_name}")
+                                        logger.warning(f"  ❌ No permission to remove roles from {member.display_name}")
                                     except discord.HTTPException as e:
-                                        print(f"  ❌ Error removing roles from {member.display_name}: {e}")
+                                        logger.error(f"  ❌ Error removing roles from {member.display_name}: {e}")
                                 
                                 processed_count += 1
                                 continue  # Skip to next member
@@ -228,11 +318,11 @@ async def hourly_role_management():
                                 if roles_to_add:
                                     try:
                                         await member.add_roles(*roles_to_add, reason="Hourly role assignment: Has hourly-check role")
-                                        print(f"  🔄 Added {len(roles_to_add)} roles to {member.display_name}")
+                                        logger.info(f"  🔄 Added {len(roles_to_add)} roles to {member.display_name}")
                                     except discord.Forbidden:
-                                        print(f"  ❌ No permission to add roles to {member.display_name}")
+                                        logger.warning(f"  ❌ No permission to add roles to {member.display_name}")
                                     except discord.HTTPException as e:
-                                        print(f"  ❌ Error adding roles to {member.display_name}: {e}")
+                                        logger.error(f"  ❌ Error adding roles to {member.display_name}: {e}")
                                 
                                 processed_count += 1
                             
@@ -245,37 +335,37 @@ async def hourly_role_management():
                                 if SPECIAL_ROLE_TO_ADD not in member_role_ids:
                                     try:
                                         await member.add_roles(special_role, reason="Hourly role assignment: Has special role")
-                                        print(f"  ⭐ Added special role to {member.display_name}")
+                                        logger.info(f"  ⭐ Added special role to {member.display_name}")
                                     except discord.Forbidden:
-                                        print(f"  ❌ No permission to add special role to {member.display_name}")
+                                        logger.warning(f"  ❌ No permission to add special role to {member.display_name}")
                                     except discord.HTTPException as e:
-                                        print(f"  ❌ Error adding special role to {member.display_name}: {e}")
+                                        logger.error(f"  ❌ Error adding special role to {member.display_name}: {e}")
                                 processed_count += 1
                             elif special_role and SPECIAL_ROLE_TO_ADD in member_role_ids:
                                 # Remove SPECIAL_ROLE_TO_ADD if they have it but shouldn't
                                 try:
                                     await member.remove_roles(special_role, reason="Hourly role cleanup: No longer has special role")
-                                    print(f"  ⭐ Removed special role from {member.display_name}")
+                                    logger.info(f"  ⭐ Removed special role from {member.display_name}")
                                 except discord.Forbidden:
-                                    print(f"  ❌ No permission to remove special role from {member.display_name}")
+                                    logger.warning(f"  ❌ No permission to remove special role from {member.display_name}")
                                 except discord.HTTPException as e:
-                                    print(f"  ❌ Error removing special role from {member.display_name}: {e}")
+                                    logger.error(f"  ❌ Error removing special role from {member.display_name}: {e}")
                                 processed_count += 1
                                 
                         except Exception as e:
-                            print(f"  ⚠️ Error processing {member.display_name}: {e}")
+                            logger.error(f"  ⚠️ Error processing {member.display_name}: {e}")
                             continue
                     
-                    print(f"✅ Completed hourly check for {guild.name}: Processed {processed_count} members")
+                    logger.info(f"✅ Completed hourly check for {guild.name}: Processed {processed_count} members")
                     
                 except Exception as e:
-                    print(f"⚠️ Error processing guild {guild.name}: {e}")
+                    logger.error(f"⚠️ Error processing guild {guild.name}: {e}")
                     continue
             
-            print(f"🕐 [{datetime.now()}] Hourly role check completed. Waiting 1 hour...")
+            logger.info(f"🕐 Hourly role check completed. Waiting 1 hour...")
             
         except Exception as e:
-            print(f"💥 Critical error in hourly_role_management: {e}")
+            logger.error(f"💥 Critical error in hourly_role_management: {e}")
         
         # Wait 1 hour (3600 seconds) before next check
         await asyncio.sleep(3600)
@@ -285,18 +375,18 @@ async def hourly_role_management():
 # ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("───" * 14)
+    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    logger.info("───" * 14)
 
     try:
         synced = await tree.sync()
-        print(f"Synced {len(synced)} command(s) globally")
+        logger.info(f"✅ Synced {len(synced)} command(s) globally")
     except Exception as e:
-        print(f"Sync failed: {e}")
+        logger.error(f"❌ Sync failed: {e}")
     
-    # Start the hourly role management task (ADDED)
+    # Start the hourly role management task
     bot.loop.create_task(hourly_role_management())
-    print("⏰ Started hourly role management task")
+    logger.info("⏰ Started hourly role management task")
 
 # ────────────────────────────────────────────────
 #   6. Discharge Modal (WITH ROLE HIERARCHY CHECK)
@@ -750,10 +840,10 @@ class AddMedalModal(ui.Modal, title="Add New Medal Type"):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            print(f"➕ Adding medal: {self.medal_name.value}")
+            logger.info(f"➕ Adding medal: {self.medal_name.value}")
             result = await call_apps_script('addMedalType', {'medalName': self.medal_name.value})
             
-            print(f"➕ Result: {result}")
+            logger.info(f"➕ Result: {result}")
             
             if result and result.get('success'):
                 embed = discord.Embed(
@@ -984,12 +1074,38 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   13. Run
+#   13. Run with Connection Manager (MODIFIED)
 # ────────────────────────────────────────────────
 async def main():
-    async with bot:
-        await bot.start(TOKEN)
+    """Main entry point with connection management"""
+    logger.info("🚀 Starting Discord bot...")
+    
+    # Add initial delay to avoid immediate rate limiting
+    initial_delay = random.randint(30, 90)
+    logger.info(f"⏱️ Waiting {initial_delay} seconds before connecting to avoid rate limiting...")
+    await asyncio.sleep(initial_delay)
+    
+    # Use the connection manager for smart retries
+    success = await conn_manager.connect_with_backoff(bot, TOKEN)
+    
+    if not success:
+        logger.critical("Failed to connect after all retries. Exiting.")
+        return
+    
+    # Keep the bot running
+    try:
+        await bot.wait_until_ready()
+        logger.info("✨ Bot is ready and running!")
+        await asyncio.Event().wait()  # Wait forever
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        await bot.close()
 
 if __name__ == "__main__":
-    # keep_alive.keep_alive() ADD THIS LINE
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}")
+        sys.exit(1)
