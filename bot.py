@@ -10,8 +10,10 @@ from typing import List, Dict, Optional
 import logging
 import random
 import time
-from discord.errors import HTTPException, RateLimited
 import sys
+import threading
+from discord.errors import HTTPException, RateLimited
+from flask import Flask, jsonify
 
 # ────────────────────────────────────────────────
 #   Setup Logging
@@ -34,10 +36,10 @@ TARGET_ROLE_1_ID     = 1332058188933103677
 TARGET_ROLE_2_ID     = 935023208946606081
 APPROVAL_CHANNEL_ID  = 1468197242186764381
 
-# Role IDs for hourly management (ADDED)
-HOURLY_CHECK_ROLE_ID = 959996960834748416  # If someone has this role
+# Role IDs for hourly management
+HOURLY_CHECK_ROLE_ID = 959996960834748416
 
-# Roles to add if they don't have them (when they have HOURLY_CHECK_ROLE_ID) (ADDED)
+# Roles to add if they don't have them (when they have HOURLY_CHECK_ROLE_ID)
 ROLES_TO_ADD = [
     1467443766423064641,
     1467443606028816502,
@@ -50,7 +52,7 @@ ROLES_TO_ADD = [
     1467444235853762714
 ]
 
-# Roles that should remove all the above roles + HOURLY_CHECK_ROLE_ID (ADDED)
+# Roles that should remove all the above roles + HOURLY_CHECK_ROLE_ID
 ROLES_THAT_REMOVE = [
     1332058188933103677,
     935023208946606081,
@@ -59,7 +61,7 @@ ROLES_THAT_REMOVE = [
     1331957308703375401
 ]
 
-# Special case roles that add another role (ADDED)
+# Special case roles that add another role
 SPECIAL_ROLE_1 = 1331826865744248892
 SPECIAL_ROLE_2 = 959997171648835594
 SPECIAL_ROLE_TO_ADD = 1467443465041477764
@@ -68,7 +70,7 @@ SPECIAL_ROLE_TO_ADD = 1467443465041477764
 APPS_SCRIPT_WEB_APP_URL = ""
 
 # ────────────────────────────────────────────────
-#   Connection Manager Class (NEW)
+#   Connection Manager Class
 # ────────────────────────────────────────────────
 class ConnectionManager:
     def __init__(self):
@@ -246,7 +248,30 @@ bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # ────────────────────────────────────────────────
-#   4. Hourly Role Management Task (ADDED)
+#   Web Server for Render Health Checks
+# ────────────────────────────────────────────────
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health_check():
+    return jsonify({"status": "online", "bot": str(bot.user) if bot.user else "starting"})
+
+@flask_app.route('/ping')
+def ping():
+    return "OK", 200
+
+def run_webserver():
+    """Run Flask web server on the port Render expects"""
+    port = int(os.environ.get('PORT', 10000))
+    flask_app.run(host='0.0.0.0', port=port, debug=False)
+
+# Start web server in a separate thread
+web_server_thread = threading.Thread(target=run_webserver, daemon=True)
+web_server_thread.start()
+logger.info(f"🌐 Web server started on port {os.environ.get('PORT', 10000)}")
+
+# ────────────────────────────────────────────────
+#   4. Hourly Role Management Task
 # ────────────────────────────────────────────────
 async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
@@ -371,7 +396,7 @@ async def hourly_role_management():
         await asyncio.sleep(3600)
 
 # ────────────────────────────────────────────────
-#   5. Ready event + command sync + start background task (MODIFIED)
+#   5. Ready event + command sync + start background task
 # ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -571,7 +596,7 @@ class DischargeApprovalView(ui.View):
         await interaction.response.send_message("Request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   8. Medal Award Modal (FIXED with defer)
+#   8. Medal Award Modal
 # ────────────────────────────────────────────────
 class MedalAwardModal(ui.Modal, title="Medal Award Request"):
     user_ids = ui.TextInput(
@@ -667,7 +692,7 @@ class MedalAwardModal(ui.Modal, title="Medal Award Request"):
         await interaction.followup.send("Medal award request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   9. Medal Removal Modal (FIXED with defer)
+#   9. Medal Removal Modal
 # ────────────────────────────────────────────────
 class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
     user_ids = ui.TextInput(
@@ -818,7 +843,7 @@ class MedalApprovalView(ui.View):
         await interaction.response.send_message("Medal request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   11. New Medal Management Modals (FIXED)
+#   11. New Medal Management Modals
 # ────────────────────────────────────────────────
 class AddMedalModal(ui.Modal, title="Add New Medal Type"):
     medal_name = ui.TextInput(
@@ -1074,7 +1099,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   13. Run with Connection Manager (MODIFIED)
+#   13. Run with Connection Manager
 # ────────────────────────────────────────────────
 async def main():
     """Main entry point with connection management"""
