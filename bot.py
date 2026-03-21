@@ -158,7 +158,9 @@ if not APPS_SCRIPT_WEB_APP_URL or APPS_SCRIPT_WEB_APP_URL == "YOUR_WEB_APP_URL_H
     raise ValueError("APPS_SCRIPT_WEB_APP_URL not configured in .env file!")
 
 if not PERSONNEL_SCRIPT_URL or PERSONNEL_SCRIPT_URL == "":
-    logger.warning("⚠️ PERSONNEL_SCRIPT_URL not configured in .env file! Status command will not work.")
+    logger.info("ℹ️ PERSONNEL_SCRIPT_URL not configured. Profile command will be disabled until configured.")
+else:
+    logger.info(f"✅ PERSONNEL_SCRIPT_URL configured: {PERSONNEL_SCRIPT_URL[:50]}...")
 
 # ────────────────────────────────────────────────
 #   2. Apps Script API Helper Functions (Medals)
@@ -448,8 +450,20 @@ async def on_ready():
     logger.info("───" * 14)
 
     try:
+        # Sync commands and log what was synced
         synced = await tree.sync()
         logger.info(f"✅ Synced {len(synced)} command(s) globally")
+        
+        # Log all synced command names for debugging
+        command_names = [cmd.name for cmd in synced]
+        logger.info(f"📝 Available commands: {', '.join(command_names)}")
+        
+        # Specifically check if profile command is in the list
+        if 'profile' in command_names:
+            logger.info("✅ Profile command successfully synced!")
+        else:
+            logger.warning("⚠️ Profile command was not found in synced commands!")
+            
     except Exception as e:
         logger.error(f"❌ Sync failed: {e}")
     
@@ -1143,12 +1157,12 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   14. Personnel Status Command
+#   14. Profile Command (formerly status)
 # ────────────────────────────────────────────────
-@tree.command(name="status", description="Check personnel status by RP name")
+@tree.command(name="profile", description="Check personnel profile by RP name")
 @app_commands.describe(roleplay_name="The roleplay name to search for")
-async def status_command(interaction: discord.Interaction, roleplay_name: str):
-    """Check personnel status from Google Sheets"""
+async def profile_command(interaction: discord.Interaction, roleplay_name: str):
+    """Check personnel profile from Google Sheets"""
     
     await interaction.response.defer()
     
@@ -1156,7 +1170,7 @@ async def status_command(interaction: discord.Interaction, roleplay_name: str):
         # Check if personnel script URL is configured
         if not PERSONNEL_SCRIPT_URL:
             await interaction.followup.send(
-                "❌ Personnel status system is not configured. Please contact an administrator.",
+                "❌ Personnel profile system is not configured. Please contact an administrator.",
                 ephemeral=True
             )
             return
@@ -1205,7 +1219,7 @@ async def status_command(interaction: discord.Interaction, roleplay_name: str):
         
         # Create embed
         embed = discord.Embed(
-            title=f"📋 Personnel Status: {personnel.get('rpName', 'Unknown')}",
+            title=f"📋 Personnel Profile: {personnel.get('rpName', 'Unknown')}",
             color=loa_color,
             timestamp=datetime.now(timezone.utc)
         )
@@ -1265,18 +1279,18 @@ async def status_command(interaction: discord.Interaction, roleplay_name: str):
         
         # Add rank progression indicator based on activity points
         if activity_points > 0:
-            if activity_points < 1:
-                progression = "Bad Activity"
-                progression_desc = "1 or more events attended/hosted."
-            elif activity_points < 3:
-                progression = "Okay Activity"
-                progression_desc = "3 or more events attended/hosted."
-            elif activity_points < 6:
-                progression = "Good Activity"
-                progression_desc = "6 or more events attended/hosted."
+            if activity_points < 100:
+                progression = "🟢 Junior"
+                progression_desc = "0-99 points"
+            elif activity_points < 300:
+                progression = "🔵 Intermediate"
+                progression_desc = "100-299 points"
+            elif activity_points < 600:
+                progression = "🟠 Senior"
+                progression_desc = "300-599 points"
             else:
-                progression = "Amazing Activity"
-                progression_desc = "12 or more events attended/hosted."
+                progression = "💎 Elite"
+                progression_desc = "600+ points"
             
             embed.add_field(
                 name="📈 Rank Progression",
@@ -1293,14 +1307,48 @@ async def status_command(interaction: discord.Interaction, roleplay_name: str):
         await interaction.followup.send(embed=embed)
         
     except Exception as e:
-        logger.error(f"Error in status command: {e}")
+        logger.error(f"Error in profile command: {e}")
         await interaction.followup.send(
             f"❌ An error occurred while searching: {str(e)}",
             ephemeral=True
         )
 
 # ────────────────────────────────────────────────
-#   15. Run with Connection Manager
+#   15. Sync Command (Admin Only - for troubleshooting)
+# ────────────────────────────────────────────────
+@tree.command(name="sync", description="Sync slash commands (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def sync_command(interaction: discord.Interaction):
+    """Force sync all slash commands"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("This command is for administrators only.", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Sync globally
+        synced = await tree.sync()
+        
+        embed = discord.Embed(
+            title="✅ Commands Synced",
+            description=f"Successfully synced {len(synced)} commands globally.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # List all synced commands
+        command_list = "\n".join([f"• /{cmd.name}" for cmd in synced])
+        if command_list:
+            embed.add_field(name="Commands Available", value=command_list, inline=False)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(f"Error syncing commands: {str(e)}", ephemeral=True)
+
+# ────────────────────────────────────────────────
+#   16. Run with Connection Manager
 # ────────────────────────────────────────────────
 async def main():
     """Main entry point with connection management"""
