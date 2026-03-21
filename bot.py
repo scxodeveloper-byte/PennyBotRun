@@ -10,6 +10,7 @@ from typing import List, Dict, Optional
 import logging
 import sys
 import threading
+import time
 from flask import Flask, jsonify
 
 # ────────────────────────────────────────────────
@@ -248,9 +249,9 @@ async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
     await bot.wait_until_ready()
     
-    # Wait 2 minutes before first run to ensure bot is fully connected
-    logger.info("⏰ Waiting 2 minutes before starting hourly role management...")
-    await asyncio.sleep(120)
+    # Wait 5 minutes before first run to ensure bot is fully connected and stable
+    logger.info("⏰ Waiting 5 minutes before starting hourly role management...")
+    await asyncio.sleep(300)
     
     while not bot.is_closed():
         try:
@@ -396,9 +397,9 @@ async def on_ready():
     except Exception as e:
         logger.error(f"❌ Sync failed: {e}")
     
-    # Start hourly role management task (delayed by 2 minutes)
+    # Start hourly role management task (delayed by 5 minutes)
     bot.loop.create_task(hourly_role_management())
-    logger.info("⏰ Scheduled hourly role management (will start in 2 minutes)")
+    logger.info("⏰ Scheduled hourly role management (will start in 5 minutes)")
 
 # ────────────────────────────────────────────────
 #   7. Discharge Modal
@@ -1207,6 +1208,9 @@ async def sync_command(interaction: discord.Interaction):
 async def main():
     """Main entry point"""
     logger.info("🚀 Starting Discord bot...")
+    
+    # Add a small delay before connecting
+    await asyncio.sleep(5)
     
     async with bot:
         await bot.start(TOKEN)
