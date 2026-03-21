@@ -66,8 +66,9 @@ SPECIAL_ROLE_1 = 1331826865744248892
 SPECIAL_ROLE_2 = 959997171648835594
 SPECIAL_ROLE_TO_ADD = 1467443465041477764
 
-# Apps Script Web App URL
+# Apps Script Web App URLs
 APPS_SCRIPT_WEB_APP_URL = ""
+PERSONNEL_SCRIPT_URL = ""
 
 # ────────────────────────────────────────────────
 #   Connection Manager Class
@@ -148,6 +149,7 @@ conn_manager = ConnectionManager()
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPS_SCRIPT_WEB_APP_URL = os.getenv("APPS_SCRIPT_WEB_APP_URL", APPS_SCRIPT_WEB_APP_URL)
+PERSONNEL_SCRIPT_URL = os.getenv("PERSONNEL_SCRIPT_URL", PERSONNEL_SCRIPT_URL)
 
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN not found in .env file!")
@@ -155,8 +157,11 @@ if not TOKEN:
 if not APPS_SCRIPT_WEB_APP_URL or APPS_SCRIPT_WEB_APP_URL == "YOUR_WEB_APP_URL_HERE":
     raise ValueError("APPS_SCRIPT_WEB_APP_URL not configured in .env file!")
 
+if not PERSONNEL_SCRIPT_URL or PERSONNEL_SCRIPT_URL == "":
+    logger.warning("⚠️ PERSONNEL_SCRIPT_URL not configured in .env file! Status command will not work.")
+
 # ────────────────────────────────────────────────
-#   2. Apps Script API Helper Functions
+#   2. Apps Script API Helper Functions (Medals)
 # ────────────────────────────────────────────────
 async def call_apps_script(function_name: str, data: dict = None):
     """Call Apps Script web app function"""
@@ -239,7 +244,46 @@ async def get_medal_stats():
     return result
 
 # ────────────────────────────────────────────────
-#   3. Bot setup
+#   3. Personnel Status API Helper Functions
+# ────────────────────────────────────────────────
+async def call_personnel_script(function_name: str, data: dict = None):
+    """Call Personnel Status Apps Script web app"""
+    if not PERSONNEL_SCRIPT_URL:
+        logger.error("❌ PERSONNEL_SCRIPT_URL not configured")
+        return None
+        
+    try:
+        async with aiohttp.ClientSession() as session:
+            params = {'function': function_name}
+            if data:
+                params.update(data)
+            
+            logger.info(f"📡 Calling Personnel Script: {function_name}")
+            
+            async with session.get(PERSONNEL_SCRIPT_URL, params=params) as response:
+                response_text = await response.text()
+                logger.debug(f"📡 Personnel Script Response: {response.status}")
+                
+                if response.status == 200:
+                    try:
+                        return json.loads(response_text)
+                    except json.JSONDecodeError:
+                        logger.error(f"⚠️ Failed to parse JSON from personnel script")
+                        return None
+                else:
+                    logger.error(f"❌ Error calling personnel script {function_name}: {response.status}")
+                    return None
+    except Exception as e:
+        logger.error(f"💥 Exception calling personnel script: {e}")
+        return None
+
+async def find_personnel(rp_name: str):
+    """Find personnel by RP name in the personnel sheets"""
+    result = await call_personnel_script('findPersonnel', {'rpName': rp_name})
+    return result
+
+# ────────────────────────────────────────────────
+#   4. Bot setup
 # ────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
@@ -271,7 +315,7 @@ web_server_thread.start()
 logger.info(f"🌐 Web server started on port {os.environ.get('PORT', 10000)}")
 
 # ────────────────────────────────────────────────
-#   4. Hourly Role Management Task
+#   5. Hourly Role Management Task
 # ────────────────────────────────────────────────
 async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
@@ -396,7 +440,7 @@ async def hourly_role_management():
         await asyncio.sleep(3600)
 
 # ────────────────────────────────────────────────
-#   5. Ready event + command sync + start background task
+#   6. Ready event + command sync + start background task
 # ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -414,7 +458,7 @@ async def on_ready():
     logger.info("⏰ Started hourly role management task")
 
 # ────────────────────────────────────────────────
-#   6. Discharge Modal (WITH ROLE HIERARCHY CHECK)
+#   7. Discharge Modal (WITH ROLE HIERARCHY CHECK)
 # ────────────────────────────────────────────────
 class DischargeModal(ui.Modal, title="Discharge Request"):
     user_ids = ui.TextInput(
@@ -532,7 +576,7 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
         await interaction.response.send_message("Request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   7. Discharge Approval View
+#   8. Discharge Approval View
 # ────────────────────────────────────────────────
 class DischargeApprovalView(ui.View):
     def __init__(self, targets: list[discord.Member], reason: str):
@@ -596,7 +640,7 @@ class DischargeApprovalView(ui.View):
         await interaction.response.send_message("Request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   8. Medal Award Modal
+#   9. Medal Award Modal
 # ────────────────────────────────────────────────
 class MedalAwardModal(ui.Modal, title="Medal Award Request"):
     user_ids = ui.TextInput(
@@ -692,7 +736,7 @@ class MedalAwardModal(ui.Modal, title="Medal Award Request"):
         await interaction.followup.send("Medal award request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   9. Medal Removal Modal
+#   10. Medal Removal Modal
 # ────────────────────────────────────────────────
 class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
     user_ids = ui.TextInput(
@@ -779,7 +823,7 @@ class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
         await interaction.followup.send("Medal removal request submitted for review.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   10. Medal Approval View
+#   11. Medal Approval View
 # ────────────────────────────────────────────────
 class MedalApprovalView(ui.View):
     def __init__(self, targets: list[discord.Member], medal_name: str, reason: str, is_award: bool):
@@ -843,7 +887,7 @@ class MedalApprovalView(ui.View):
         await interaction.response.send_message("Medal request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   11. New Medal Management Modals
+#   12. New Medal Management Modals
 # ────────────────────────────────────────────────
 class AddMedalModal(ui.Modal, title="Add New Medal Type"):
     medal_name = ui.TextInput(
@@ -923,7 +967,7 @@ class DeleteMedalModal(ui.Modal, title="Delete Medal Type"):
             await interaction.followup.send(f"❌ Exception: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   12. Commands
+#   13. Commands
 # ────────────────────────────────────────────────
 @tree.command(name="d", description="Request discharge of members (requires approval)")
 @app_commands.default_permissions(manage_roles=True)
@@ -1099,7 +1143,164 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   13. Run with Connection Manager
+#   14. Personnel Status Command
+# ────────────────────────────────────────────────
+@tree.command(name="status", description="Check personnel status by RP name")
+@app_commands.describe(roleplay_name="The roleplay name to search for")
+async def status_command(interaction: discord.Interaction, roleplay_name: str):
+    """Check personnel status from Google Sheets"""
+    
+    await interaction.response.defer()
+    
+    try:
+        # Check if personnel script URL is configured
+        if not PERSONNEL_SCRIPT_URL:
+            await interaction.followup.send(
+                "❌ Personnel status system is not configured. Please contact an administrator.",
+                ephemeral=True
+            )
+            return
+        
+        # Search for the personnel
+        result = await find_personnel(roleplay_name)
+        
+        if not result:
+            await interaction.followup.send(
+                "❌ Failed to connect to personnel database. Please try again later.",
+                ephemeral=True
+            )
+            return
+        
+        if not result.get('success'):
+            await interaction.followup.send(
+                f"❌ Error: {result.get('error', 'Unknown error')}",
+                ephemeral=True
+            )
+            return
+        
+        if not result.get('found'):
+            embed = discord.Embed(
+                title="❌ Personnel Not Found",
+                description=f"Could not find personnel with RP name: **{roleplay_name}**\n\n"
+                           f"Please check the spelling and try again. Make sure the name matches exactly as it appears in the sheets.",
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Get personnel data
+        personnel = result.get('personnel', {})
+        sheet_name = result.get('sheet', 'Unknown')
+        
+        # Prepare LOA status
+        loa_days = personnel.get('loaDaysLeft', 0)
+        if loa_days > 0:
+            loa_status = f"⚠️ **On LOA** ({loa_days} days remaining)"
+            loa_color = discord.Color.orange()
+        else:
+            loa_status = "✅ **Active**"
+            loa_color = discord.Color.green()
+        
+        # Create embed
+        embed = discord.Embed(
+            title=f"📋 Personnel Status: {personnel.get('rpName', 'Unknown')}",
+            color=loa_color,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # Add department/sheet info
+        department = sheet_name.replace(" Personnel", "")
+        embed.add_field(
+            name="🏢 Department",
+            value=department,
+            inline=True
+        )
+        
+        # Add rank
+        embed.add_field(
+            name="⭐ Rank",
+            value=personnel.get('rank', 'N/A'),
+            inline=True
+        )
+        
+        # Add activity points
+        activity_points = personnel.get('activityPoints', 0)
+        embed.add_field(
+            name="📊 Activity Points",
+            value=str(activity_points),
+            inline=True
+        )
+        
+        # Add enlistment info
+        embed.add_field(
+            name="📅 Date of Enlistment",
+            value=personnel.get('dateOfEnlistment', 'Unknown'),
+            inline=True
+        )
+        
+        # Add days enlisted
+        days_enlisted = personnel.get('daysEnlisted', 0)
+        embed.add_field(
+            name="⏱️ Days Enlisted",
+            value=str(days_enlisted),
+            inline=True
+        )
+        
+        # Add SeaDad
+        seadad = personnel.get('seadad', 'None')
+        embed.add_field(
+            name="⚓ SeaDad",
+            value=seadad if seadad != "None" else "Not Assigned",
+            inline=True
+        )
+        
+        # Add LOA status
+        embed.add_field(
+            name="🌴 Leave of Absence",
+            value=loa_status,
+            inline=True
+        )
+        
+        # Add rank progression indicator based on activity points
+        if activity_points > 0:
+            if activity_points < 1:
+                progression = "Bad Activity"
+                progression_desc = "1 or more events attended/hosted."
+            elif activity_points < 3:
+                progression = "Okay Activity"
+                progression_desc = "3 or more events attended/hosted."
+            elif activity_points < 6:
+                progression = "Good Activity"
+                progression_desc = "6 or more events attended/hosted."
+            else:
+                progression = "Amazing Activity"
+                progression_desc = "12 or more events attended/hosted."
+            
+            embed.add_field(
+                name="📈 Rank Progression",
+                value=f"{progression}\n*{progression_desc}*",
+                inline=False
+            )
+        
+        # Add footer with search info
+        embed.set_footer(
+            text=f"Requested by {interaction.user.display_name} • Found in {sheet_name}",
+            icon_url=interaction.user.display_avatar.url
+        )
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Error in status command: {e}")
+        await interaction.followup.send(
+            f"❌ An error occurred while searching: {str(e)}",
+            ephemeral=True
+        )
+
+# ────────────────────────────────────────────────
+#   15. Run with Connection Manager
 # ────────────────────────────────────────────────
 async def main():
     """Main entry point with connection management"""
