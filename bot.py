@@ -986,7 +986,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   13. Profile Command
+#   13. Profile Command (FIXED)
 # ────────────────────────────────────────────────
 @tree.command(name="profile", description="Check personnel profile by RP name")
 @app_commands.describe(roleplay_name="The roleplay name to search for")
@@ -1034,12 +1034,13 @@ async def profile_command(interaction: discord.Interaction, roleplay_name: str):
         personnel = result.get('personnel', {})
         sheet_name = result.get('sheet', 'Unknown')
         
+        # FIXED: LOA logic - 0 = Not on LOA, >0 = On LOA
         loa_days = personnel.get('loaDaysLeft', 0)
         if loa_days > 0:
             loa_status = f"⚠️ **On LOA** ({loa_days} days remaining)"
             loa_color = discord.Color.orange()
         else:
-            loa_status = "✅ **Active**"
+            loa_status = "✅ **Not on LOA**"
             loa_color = discord.Color.green()
         
         embed = discord.Embed(
@@ -1054,7 +1055,10 @@ async def profile_command(interaction: discord.Interaction, roleplay_name: str):
         
         activity_points = personnel.get('activityPoints', 0)
         embed.add_field(name="📊 Activity Points", value=str(activity_points), inline=True)
-        embed.add_field(name="📅 Date of Enlistment", value=personnel.get('dateOfEnlistment', 'Unknown'), inline=True)
+        
+        # Date of Enlistment from Column E
+        date_of_enlistment = personnel.get('dateOfEnlistment', 'Unknown')
+        embed.add_field(name="📅 Date of Enlistment", value=date_of_enlistment, inline=True)
         
         days_enlisted = personnel.get('daysEnlisted', 0)
         embed.add_field(name="⏱️ Days Enlisted", value=str(days_enlisted), inline=True)
