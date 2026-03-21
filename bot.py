@@ -7,25 +7,8 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 import aiohttp
 from typing import List, Dict, Optional
-import logging
-import random
-import time
-import sys
 import threading
-from discord.errors import HTTPException, RateLimited
-from flask import Flask, jsonify
-
-# ────────────────────────────────────────────────
-#   Setup Logging
-# ────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger('discord_bot')
+from flask import Flask
 
 # ────────────────────────────────────────────────
 #   Constants
@@ -66,81 +49,25 @@ SPECIAL_ROLE_1 = 1331826865744248892
 SPECIAL_ROLE_2 = 959997171648835594
 SPECIAL_ROLE_TO_ADD = 1467443465041477764
 
-# Apps Script Web App URL
+# Apps Script Web App URLs
 APPS_SCRIPT_WEB_APP_URL = ""
+PERSONNEL_SCRIPT_URL = ""
 
 # ────────────────────────────────────────────────
-#   Connection Manager Class
+#   Flask Web Server for Keep Alive
 # ────────────────────────────────────────────────
-class ConnectionManager:
-    def __init__(self):
-        self.last_connect_attempt = 0
-        self.min_connect_interval = 300  # 5 minutes minimum between connections
-        self.consecutive_failures = 0
-        self.max_consecutive_failures = 5
-        self.base_delay = 60  # Base delay for exponential backoff
-        
-    async def connect_with_backoff(self, bot, token):
-        """Connect to Discord with exponential backoff and rate limit handling"""
-        
-        while self.consecutive_failures < self.max_consecutive_failures:
-            try:
-                # Check if we're connecting too frequently
-                current_time = time.time()
-                time_since_last = current_time - self.last_connect_attempt
-                
-                if time_since_last < self.min_connect_interval and self.last_connect_attempt > 0:
-                    wait_time = self.min_connect_interval - time_since_last
-                    logger.info(f"⏱️ Throttling connection. Waiting {wait_time:.0f} seconds...")
-                    await asyncio.sleep(wait_time)
-                
-                # Add jitter to avoid thundering herd problem
-                jitter = random.uniform(0, 5)
-                if jitter > 0:
-                    await asyncio.sleep(jitter)
-                
-                self.last_connect_attempt = time.time()
-                await bot.start(token)
-                
-                # If we get here, connection was successful
-                self.consecutive_failures = 0
-                logger.info("✅ Successfully connected to Discord")
-                return True
-                
-            except (HTTPException, RateLimited) as e:
-                self.consecutive_failures += 1
-                
-                # Calculate wait time with exponential backoff
-                wait_time = self.base_delay * (2 ** (self.consecutive_failures - 1))
-                wait_time = min(wait_time, 3600)  # Cap at 1 hour
-                
-                # Add jitter
-                wait_time += random.uniform(0, 10)
-                
-                logger.warning(f"⚠️ Rate limited! Attempt {self.consecutive_failures}/{self.max_consecutive_failures}")
-                logger.warning(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
-                
-                if hasattr(e, 'retry_after'):
-                    logger.info(f"Discord suggests waiting {e.retry_after} seconds")
-                    wait_time = max(wait_time, e.retry_after)
-                
-                await asyncio.sleep(wait_time)
-                
-            except Exception as e:
-                self.consecutive_failures += 1
-                logger.error(f"💥 Unexpected error connecting: {e}")
-                
-                wait_time = self.base_delay * (2 ** (self.consecutive_failures - 1))
-                wait_time = min(wait_time, 3600)
-                
-                logger.info(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
-                await asyncio.sleep(wait_time)
-        
-        logger.critical("❌ Max retries reached. Could not connect to Discord.")
-        return False
+app = Flask(__name__)
 
-# Create global connection manager
-conn_manager = ConnectionManager()
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_webserver():
+    app.run(host='0.0.0.0', port=8080)
+
+# Start web server in background
+threading.Thread(target=run_webserver, daemon=True).start()
+print("🌐 Web server started on port 8080")
 
 # ────────────────────────────────────────────────
 #   1. Load token securely
@@ -148,6 +75,7 @@ conn_manager = ConnectionManager()
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPS_SCRIPT_WEB_APP_URL = os.getenv("APPS_SCRIPT_WEB_APP_URL", APPS_SCRIPT_WEB_APP_URL)
+PERSONNEL_SCRIPT_URL = os.getenv("PERSONNEL_SCRIPT_URL", PERSONNEL_SCRIPT_URL)
 
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN not found in .env file!")
@@ -155,8 +83,13 @@ if not TOKEN:
 if not APPS_SCRIPT_WEB_APP_URL or APPS_SCRIPT_WEB_APP_URL == "YOUR_WEB_APP_URL_HERE":
     raise ValueError("APPS_SCRIPT_WEB_APP_URL not configured in .env file!")
 
+if not PERSONNEL_SCRIPT_URL or PERSONNEL_SCRIPT_URL == "":
+    print("ℹ️ PERSONNEL_SCRIPT_URL not configured. Profile command will be disabled.")
+else:
+    print(f"✅ PERSONNEL_SCRIPT_URL configured")
+
 # ────────────────────────────────────────────────
-#   2. Apps Script API Helper Functions
+#   2. Apps Script API Helper Functions (Medals)
 # ────────────────────────────────────────────────
 async def call_apps_script(function_name: str, data: dict = None):
     """Call Apps Script web app function"""
@@ -166,23 +99,23 @@ async def call_apps_script(function_name: str, data: dict = None):
             if data:
                 params.update(data)
             
-            logger.info(f"📡 Calling Apps Script: {function_name}")
+            print(f"📡 Calling Apps Script: {function_name}")
             
             async with session.get(APPS_SCRIPT_WEB_APP_URL, params=params) as response:
                 response_text = await response.text()
-                logger.debug(f"📡 Response: {response.status}")
+                print(f"📡 Response: {response.status}")
                 
                 if response.status == 200:
                     try:
                         return json.loads(response_text)
                     except json.JSONDecodeError:
-                        logger.error(f"⚠️ Failed to parse JSON")
+                        print(f"⚠️ Failed to parse JSON")
                         return None
                 else:
-                    logger.error(f"❌ Error calling {function_name}: {response.status}")
+                    print(f"❌ Error calling {function_name}: {response.status}")
                     return None
     except Exception as e:
-        logger.error(f"💥 Exception calling Apps Script: {e}")
+        print(f"💥 Exception calling Apps Script: {e}")
         return None
 
 async def find_user_row(user_id: str) -> Optional[int]:
@@ -239,182 +172,156 @@ async def get_medal_stats():
     return result
 
 # ────────────────────────────────────────────────
-#   3. Bot setup
+#   3. Personnel Status API Helper Functions
+# ────────────────────────────────────────────────
+async def call_personnel_script(function_name: str, data: dict = None):
+    """Call Personnel Status Apps Script web app"""
+    if not PERSONNEL_SCRIPT_URL:
+        print("❌ PERSONNEL_SCRIPT_URL not configured")
+        return None
+        
+    try:
+        async with aiohttp.ClientSession() as session:
+            params = {'function': function_name}
+            if data:
+                params.update(data)
+            
+            print(f"📡 Calling Personnel Script: {function_name}")
+            
+            async with session.get(PERSONNEL_SCRIPT_URL, params=params) as response:
+                response_text = await response.text()
+                print(f"📡 Personnel Script Response: {response.status}")
+                
+                if response.status == 200:
+                    try:
+                        return json.loads(response_text)
+                    except json.JSONDecodeError:
+                        print(f"⚠️ Failed to parse JSON from personnel script")
+                        return None
+                else:
+                    print(f"❌ Error calling personnel script {function_name}: {response.status}")
+                    return None
+    except Exception as e:
+        print(f"💥 Exception calling personnel script: {e}")
+        return None
+
+async def find_personnel(rp_name: str):
+    """Find personnel by RP name in the personnel sheets"""
+    result = await call_personnel_script('findPersonnel', {'rpName': rp_name})
+    return result
+
+# ────────────────────────────────────────────────
+#   4. Bot setup
 # ────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 # ────────────────────────────────────────────────
-#   Web Server for Render Health Checks
-# ────────────────────────────────────────────────
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def health_check():
-    return jsonify({"status": "online", "bot": str(bot.user) if bot.user else "starting"})
-
-@flask_app.route('/ping')
-def ping():
-    return "OK", 200
-
-def run_webserver():
-    """Run Flask web server on the port Render expects"""
-    port = int(os.environ.get('PORT', 10000))
-    flask_app.run(host='0.0.0.0', port=port, debug=False)
-
-# Start web server in a separate thread
-web_server_thread = threading.Thread(target=run_webserver, daemon=True)
-web_server_thread.start()
-logger.info(f"🌐 Web server started on port {os.environ.get('PORT', 10000)}")
-
-# ────────────────────────────────────────────────
-#   4. Hourly Role Management Task
+#   5. Hourly Role Management Task
 # ────────────────────────────────────────────────
 async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
     await bot.wait_until_ready()
     
+    print("⏰ Waiting 2 minutes before starting hourly role management...")
+    await asyncio.sleep(120)
+    
     while not bot.is_closed():
         try:
-            logger.info(f"🕐 Starting hourly role check...")
+            print(f"🕐 Starting hourly role check...")
             
             for guild in bot.guilds:
                 try:
-                    # Get all members
                     members = []
                     async for member in guild.fetch_members(limit=None):
                         members.append(member)
                     
-                    logger.info(f"👥 Checking {len(members)} members in {guild.name}")
+                    print(f"👥 Checking {len(members)} members in {guild.name}")
                     
                     processed_count = 0
                     for member in members:
                         try:
-                            # Get member's role IDs
                             member_role_ids = [role.id for role in member.roles]
-                            
-                            # Check if member has HOURLY_CHECK_ROLE_ID
                             has_hourly_check_role = HOURLY_CHECK_ROLE_ID in member_role_ids
-                            
-                            # Check if member has any of the ROLES_THAT_REMOVE
                             has_remove_trigger_role = any(role_id in member_role_ids for role_id in ROLES_THAT_REMOVE)
                             
-                            # FIRST: Handle removal case (highest priority)
                             if has_remove_trigger_role:
-                                # Remove all ROLES_TO_ADD + HOURLY_CHECK_ROLE_ID
                                 roles_to_remove = []
-                                
-                                # Check which roles to remove
                                 for role_id in ROLES_TO_ADD + [HOURLY_CHECK_ROLE_ID]:
                                     if role_id in member_role_ids:
                                         role = guild.get_role(role_id)
                                         if role:
                                             roles_to_remove.append(role)
                                 
-                                # Remove roles if needed
                                 if roles_to_remove:
                                     try:
-                                        await member.remove_roles(*roles_to_remove, reason="Hourly role cleanup: Has removal-trigger role")
-                                        logger.info(f"  🔄 Removed {len(roles_to_remove)} roles from {member.display_name}")
-                                    except discord.Forbidden:
-                                        logger.warning(f"  ❌ No permission to remove roles from {member.display_name}")
-                                    except discord.HTTPException as e:
-                                        logger.error(f"  ❌ Error removing roles from {member.display_name}: {e}")
+                                        await member.remove_roles(*roles_to_remove, reason="Hourly role cleanup")
+                                        print(f"  🔄 Removed roles from {member.display_name}")
+                                    except Exception as e:
+                                        print(f"  ❌ Error removing roles: {e}")
                                 
                                 processed_count += 1
-                                continue  # Skip to next member
+                                continue
                             
-                            # SECOND: Handle addition case
                             if has_hourly_check_role:
-                                # Add missing roles from ROLES_TO_ADD
                                 roles_to_add = []
-                                
-                                # Check which roles are missing
                                 for role_id in ROLES_TO_ADD:
                                     if role_id not in member_role_ids:
                                         role = guild.get_role(role_id)
                                         if role:
                                             roles_to_add.append(role)
                                 
-                                # Add missing roles if needed
                                 if roles_to_add:
                                     try:
-                                        await member.add_roles(*roles_to_add, reason="Hourly role assignment: Has hourly-check role")
-                                        logger.info(f"  🔄 Added {len(roles_to_add)} roles to {member.display_name}")
-                                    except discord.Forbidden:
-                                        logger.warning(f"  ❌ No permission to add roles to {member.display_name}")
-                                    except discord.HTTPException as e:
-                                        logger.error(f"  ❌ Error adding roles to {member.display_name}: {e}")
+                                        await member.add_roles(*roles_to_add, reason="Hourly role assignment")
+                                        print(f"  🔄 Added roles to {member.display_name}")
+                                    except Exception as e:
+                                        print(f"  ❌ Error adding roles: {e}")
                                 
                                 processed_count += 1
                             
-                            # THIRD: Handle special case roles
                             has_special_role = (SPECIAL_ROLE_1 in member_role_ids) or (SPECIAL_ROLE_2 in member_role_ids)
                             special_role = guild.get_role(SPECIAL_ROLE_TO_ADD)
                             
                             if has_special_role and special_role:
-                                # Add SPECIAL_ROLE_TO_ADD if not already there
                                 if SPECIAL_ROLE_TO_ADD not in member_role_ids:
                                     try:
-                                        await member.add_roles(special_role, reason="Hourly role assignment: Has special role")
-                                        logger.info(f"  ⭐ Added special role to {member.display_name}")
-                                    except discord.Forbidden:
-                                        logger.warning(f"  ❌ No permission to add special role to {member.display_name}")
-                                    except discord.HTTPException as e:
-                                        logger.error(f"  ❌ Error adding special role to {member.display_name}: {e}")
+                                        await member.add_roles(special_role, reason="Hourly role assignment")
+                                        print(f"  ⭐ Added special role to {member.display_name}")
+                                    except Exception as e:
+                                        print(f"  ❌ Error adding special role: {e}")
                                 processed_count += 1
                             elif special_role and SPECIAL_ROLE_TO_ADD in member_role_ids:
-                                # Remove SPECIAL_ROLE_TO_ADD if they have it but shouldn't
                                 try:
-                                    await member.remove_roles(special_role, reason="Hourly role cleanup: No longer has special role")
-                                    logger.info(f"  ⭐ Removed special role from {member.display_name}")
-                                except discord.Forbidden:
-                                    logger.warning(f"  ❌ No permission to remove special role from {member.display_name}")
-                                except discord.HTTPException as e:
-                                    logger.error(f"  ❌ Error removing special role from {member.display_name}: {e}")
+                                    await member.remove_roles(special_role, reason="Hourly role cleanup")
+                                    print(f"  ⭐ Removed special role from {member.display_name}")
+                                except Exception as e:
+                                    print(f"  ❌ Error removing special role: {e}")
                                 processed_count += 1
                                 
                         except Exception as e:
-                            logger.error(f"  ⚠️ Error processing {member.display_name}: {e}")
+                            print(f"  ⚠️ Error processing {member.display_name}: {e}")
                             continue
                     
-                    logger.info(f"✅ Completed hourly check for {guild.name}: Processed {processed_count} members")
+                    print(f"✅ Completed hourly check for {guild.name}: Processed {processed_count} members")
                     
                 except Exception as e:
-                    logger.error(f"⚠️ Error processing guild {guild.name}: {e}")
+                    print(f"⚠️ Error processing guild {guild.name}: {e}")
                     continue
             
-            logger.info(f"🕐 Hourly role check completed. Waiting 1 hour...")
+            print(f"🕐 Hourly role check completed. Waiting 1 hour...")
             
         except Exception as e:
-            logger.error(f"💥 Critical error in hourly_role_management: {e}")
+            print(f"💥 Critical error in hourly_role_management: {e}")
         
-        # Wait 1 hour (3600 seconds) before next check
         await asyncio.sleep(3600)
 
 # ────────────────────────────────────────────────
-#   5. Ready event + command sync + start background task
-# ────────────────────────────────────────────────
-@bot.event
-async def on_ready():
-    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    logger.info("───" * 14)
-
-    try:
-        synced = await tree.sync()
-        logger.info(f"✅ Synced {len(synced)} command(s) globally")
-    except Exception as e:
-        logger.error(f"❌ Sync failed: {e}")
-    
-    # Start the hourly role management task
-    bot.loop.create_task(hourly_role_management())
-    logger.info("⏰ Started hourly role management task")
-
-# ────────────────────────────────────────────────
-#   6. Discharge Modal (WITH ROLE HIERARCHY CHECK)
+#   6. Discharge Modal
 # ────────────────────────────────────────────────
 class DischargeModal(ui.Modal, title="Discharge Request"):
     user_ids = ui.TextInput(
@@ -447,7 +354,6 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
         errors = []
         hierarchy_violations = []
 
-        # Get requester's role IDs
         requester_role_ids = [role.id for role in interaction.user.roles]
         requester_highest_role = interaction.user.top_role
 
@@ -456,10 +362,7 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
                 uid = int(id_str.strip())
                 member = await guild.fetch_member(uid)
                 
-                # Check if requester can manage this member (role hierarchy)
                 if not interaction.user.guild_permissions.administrator:
-                    # Check if target has ANY role that requester doesn't have
-                    # and that role is higher than requester's highest role
                     target_has_higher_role = False
                     higher_roles = []
                     
@@ -470,7 +373,7 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
                     
                     if target_has_higher_role:
                         hierarchy_violations.append(f"{member.mention} has higher role(s): {', '.join(higher_roles)}")
-                        continue  # Skip this target
+                        continue
                 
                 targets.append(member)
             except ValueError:
@@ -480,7 +383,6 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
             except Exception as e:
                 errors.append(f"Error ({id_str}): {str(e)}")
 
-        # If there are hierarchy violations, stop immediately
         if hierarchy_violations:
             error_message = "**Cannot discharge members with higher roles:**\n"
             error_message += "\n".join(hierarchy_violations)
@@ -514,7 +416,6 @@ class DischargeModal(ui.Modal, title="Discharge Request"):
             color=discord.Color.blue()
         )
         
-        # Add role hierarchy info to embed
         embed.add_field(
             name="Role Hierarchy Check", 
             value="✅ All targets have lower roles than requester", 
@@ -564,10 +465,7 @@ class DischargeApprovalView(ui.View):
 
         for member in self.targets:
             try:
-                # Change nickname
                 await member.edit(nick=self.new_nickname, reason=f"Discharge approved - {self.reason}")
-                
-                # Update roles (remove all, add the two)
                 await member.edit(roles=[role1, role2], reason=f"Discharge approved - {self.reason}")
                 success += 1
             except discord.Forbidden as e:
@@ -626,10 +524,8 @@ class MedalAwardModal(ui.Modal, title="Medal Award Request"):
             await interaction.response.send_message("You lack permission to request medal awards.", ephemeral=True)
             return
 
-        # Defer the response first to prevent "Something went wrong"
         await interaction.response.defer(ephemeral=True)
 
-        # Validate medal name exists in sheet
         existing_medals = await get_all_medal_types()
         if self.medal_name.value not in existing_medals:
             await interaction.followup.send(
@@ -722,7 +618,6 @@ class MedalRemovalModal(ui.Modal, title="Medal Removal Request"):
             await interaction.response.send_message("You lack permission to request medal removals.", ephemeral=True)
             return
 
-        # Defer the response first
         await interaction.response.defer(ephemeral=True)
 
         id_list = self.user_ids.value.split()
@@ -806,13 +701,11 @@ class MedalApprovalView(ui.View):
             try:
                 user_id_str = str(member.id)
                 
-                # Check if user exists in column A, add if not
                 row = await find_user_row(user_id_str)
                 if not row:
                     await add_user_to_sheet(user_id_str)
                     row = await find_user_row(user_id_str)
                 
-                # Update medal status (set Y or empty in the medal column)
                 if await update_medal_for_user(user_id_str, self.medal_name, self.is_award):
                     success += 1
                 else:
@@ -843,7 +736,7 @@ class MedalApprovalView(ui.View):
         await interaction.response.send_message("Medal request **denied**.", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   11. New Medal Management Modals
+#   11. Medal Management Modals
 # ────────────────────────────────────────────────
 class AddMedalModal(ui.Modal, title="Add New Medal Type"):
     medal_name = ui.TextInput(
@@ -865,10 +758,7 @@ class AddMedalModal(ui.Modal, title="Add New Medal Type"):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            logger.info(f"➕ Adding medal: {self.medal_name.value}")
             result = await call_apps_script('addMedalType', {'medalName': self.medal_name.value})
-            
-            logger.info(f"➕ Result: {result}")
             
             if result and result.get('success'):
                 embed = discord.Embed(
@@ -1040,11 +930,10 @@ async def medal_stats_command(interaction: discord.Interaction):
                     inline=False
                 )
             
-            # List all medals with counts
             distribution = data.get('medalDistribution', {})
             if distribution:
                 stats_text = "\n".join([f"**{medal}**: {count} awards" for medal, count in distribution.items()])
-                if len(stats_text) > 1000:  # Discord embed field limit
+                if len(stats_text) > 1000:
                     stats_text = stats_text[:1000] + "..."
                 embed.add_field(name="Medal Distribution", value=stats_text, inline=False)
         
@@ -1064,11 +953,9 @@ async def test_connection_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     try:
-        # Test basic connection
         test_result = await call_apps_script('test')
         
         if test_result and test_result.get('success'):
-            # Test getting medal types
             medal_types = await get_all_medal_types()
             
             embed = discord.Embed(
@@ -1099,38 +986,179 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   13. Run with Connection Manager
+#   13. Profile Command
 # ────────────────────────────────────────────────
-async def main():
-    """Main entry point with connection management"""
-    logger.info("🚀 Starting Discord bot...")
+@tree.command(name="profile", description="Check personnel profile by RP name")
+@app_commands.describe(roleplay_name="The roleplay name to search for")
+async def profile_command(interaction: discord.Interaction, roleplay_name: str):
+    """Check personnel profile from Google Sheets"""
     
-    # Add initial delay to avoid immediate rate limiting
-    initial_delay = random.randint(30, 90)
-    logger.info(f"⏱️ Waiting {initial_delay} seconds before connecting to avoid rate limiting...")
-    await asyncio.sleep(initial_delay)
+    await interaction.response.defer()
     
-    # Use the connection manager for smart retries
-    success = await conn_manager.connect_with_backoff(bot, TOKEN)
-    
-    if not success:
-        logger.critical("Failed to connect after all retries. Exiting.")
+    try:
+        if not PERSONNEL_SCRIPT_URL:
+            await interaction.followup.send(
+                "❌ Personnel profile system is not configured. Please contact an administrator.",
+                ephemeral=True
+            )
+            return
+        
+        result = await find_personnel(roleplay_name)
+        
+        if not result:
+            await interaction.followup.send(
+                "❌ Failed to connect to personnel database. Please try again later.",
+                ephemeral=True
+            )
+            return
+        
+        if not result.get('success'):
+            await interaction.followup.send(
+                f"❌ Error: {result.get('error', 'Unknown error')}",
+                ephemeral=True
+            )
+            return
+        
+        if not result.get('found'):
+            embed = discord.Embed(
+                title="❌ Personnel Not Found",
+                description=f"Could not find personnel with RP name: **{roleplay_name}**\n\n"
+                           f"Please check the spelling and try again.",
+                color=discord.Color.red(),
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+            await interaction.followup.send(embed=embed)
+            return
+        
+        personnel = result.get('personnel', {})
+        sheet_name = result.get('sheet', 'Unknown')
+        
+        loa_days = personnel.get('loaDaysLeft', 0)
+        if loa_days > 0:
+            loa_status = f"⚠️ **On LOA** ({loa_days} days remaining)"
+            loa_color = discord.Color.orange()
+        else:
+            loa_status = "✅ **Active**"
+            loa_color = discord.Color.green()
+        
+        embed = discord.Embed(
+            title=f"📋 Personnel Profile: {personnel.get('rpName', 'Unknown')}",
+            color=loa_color,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        department = sheet_name.replace(" Personnel", "")
+        embed.add_field(name="🏢 Department", value=department, inline=True)
+        embed.add_field(name="⭐ Rank", value=personnel.get('rank', 'N/A'), inline=True)
+        
+        activity_points = personnel.get('activityPoints', 0)
+        embed.add_field(name="📊 Activity Points", value=str(activity_points), inline=True)
+        embed.add_field(name="📅 Date of Enlistment", value=personnel.get('dateOfEnlistment', 'Unknown'), inline=True)
+        
+        days_enlisted = personnel.get('daysEnlisted', 0)
+        embed.add_field(name="⏱️ Days Enlisted", value=str(days_enlisted), inline=True)
+        
+        seadad = personnel.get('seadad', 'None')
+        embed.add_field(name="⚓ SeaDad", value=seadad if seadad != "None" else "Not Assigned", inline=True)
+        embed.add_field(name="🌴 Leave of Absence", value=loa_status, inline=True)
+        
+        # Activity Status based on points
+        if activity_points == 0:
+            activity_status = "🔴 **Not Active**"
+        elif activity_points < 5:
+            activity_status = "🟡 **Active Enough**"
+        elif activity_points < 10:
+            activity_status = "🟢 **Decently Active**"
+        else:
+            activity_status = "💎 **Extraordinary Activity**"
+        
+        embed.add_field(name="📈 Activity Status", value=activity_status, inline=False)
+        
+        embed.set_footer(
+            text=f"Requested by {interaction.user.display_name} • Found in {sheet_name}",
+            icon_url=interaction.user.display_avatar.url
+        )
+        
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        print(f"Error in profile command: {e}")
+        await interaction.followup.send(
+            f"❌ An error occurred while searching: {str(e)}",
+            ephemeral=True
+        )
+
+# ────────────────────────────────────────────────
+#   14. Sync Command (Admin Only)
+# ────────────────────────────────────────────────
+@tree.command(name="sync", description="Sync slash commands (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def sync_command(interaction: discord.Interaction):
+    """Force sync all slash commands"""
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("This command is for administrators only.", ephemeral=True)
         return
     
-    # Keep the bot running
+    await interaction.response.defer(ephemeral=True)
+    
     try:
-        await bot.wait_until_ready()
-        logger.info("✨ Bot is ready and running!")
-        await asyncio.Event().wait()  # Wait forever
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        await bot.close()
+        synced = await tree.sync()
+        
+        embed = discord.Embed(
+            title="✅ Commands Synced",
+            description=f"Successfully synced {len(synced)} commands globally.",
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        command_list = "\n".join([f"• /{cmd.name}" for cmd in synced])
+        if command_list:
+            embed.add_field(name="Commands Available", value=command_list, inline=False)
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(f"Error syncing commands: {str(e)}", ephemeral=True)
+
+# ────────────────────────────────────────────────
+#   15. Ready event + command sync + start background tasks
+# ────────────────────────────────────────────────
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print("───" * 14)
+
+    try:
+        # Sync commands
+        synced = await tree.sync()
+        print(f"✅ Synced {len(synced)} command(s) globally")
+        
+        # Log all synced command names
+        command_names = [cmd.name for cmd in synced]
+        print(f"📝 Available commands: {', '.join(command_names)}")
+        
+        # Check for profile command
+        if 'profile' in command_names:
+            print("✅ Profile command successfully synced!")
+        else:
+            print("⚠️ Profile command was not found in synced commands!")
+            
+    except Exception as e:
+        print(f"❌ Sync failed: {e}")
+    
+    # Start hourly role management task (delayed by 2 minutes)
+    bot.loop.create_task(hourly_role_management())
+    print("⏰ Scheduled hourly role management (will start in 2 minutes)")
+
+# ────────────────────────────────────────────────
+#   16. Run
+# ────────────────────────────────────────────────
+async def main():
+    print("🚀 Starting Discord bot...")
+    await asyncio.sleep(2)
+    async with bot:
+        await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.critical(f"Fatal error: {e}")
-        sys.exit(1)
+    asyncio.run(main())
