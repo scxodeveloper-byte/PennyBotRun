@@ -8,11 +8,8 @@ from dotenv import load_dotenv
 import aiohttp
 from typing import List, Dict, Optional
 import logging
-import random
-import time
 import sys
 import threading
-from discord.errors import HTTPException, RateLimited, PrivilegedIntentsRequired
 from flask import Flask, jsonify
 
 # ────────────────────────────────────────────────
@@ -69,68 +66,6 @@ SPECIAL_ROLE_TO_ADD = 1467443465041477764
 # Apps Script Web App URLs
 APPS_SCRIPT_WEB_APP_URL = ""
 PERSONNEL_SCRIPT_URL = ""
-
-# ────────────────────────────────────────────────
-#   Improved Connection Manager
-# ────────────────────────────────────────────────
-class ConnectionManager:
-    def __init__(self):
-        self.consecutive_failures = 0
-        self.max_consecutive_failures = 3
-        self.base_delay = 30
-        self.last_connect_attempt = 0
-        self.min_connect_interval = 120  # 2 minutes minimum between connection attempts
-        
-    async def connect_with_backoff(self, bot, token):
-        """Connect to Discord with proper backoff and rate limit handling"""
-        
-        # Small initial delay
-        await asyncio.sleep(3)
-        
-        while self.consecutive_failures < self.max_consecutive_failures:
-            try:
-                # Ensure minimum time between connection attempts
-                current_time = time.time()
-                time_since_last = current_time - self.last_connect_attempt
-                
-                if time_since_last < self.min_connect_interval and self.last_connect_attempt > 0:
-                    wait_time = self.min_connect_interval - time_since_last
-                    logger.info(f"⏱️ Throttling connection. Waiting {wait_time:.0f} seconds...")
-                    await asyncio.sleep(wait_time)
-                
-                self.last_connect_attempt = time.time()
-                logger.info(f"🔄 Attempting to connect (attempt {self.consecutive_failures + 1})...")
-                await bot.start(token)
-                
-                self.consecutive_failures = 0
-                logger.info("✅ Successfully connected to Discord")
-                return True
-                
-            except PrivilegedIntentsRequired as e:
-                logger.critical(f"❌ Privileged intents required: {e}")
-                logger.critical("Please enable Privileged Gateway Intents in Discord Developer Portal")
-                return False
-                
-            except (HTTPException, RateLimited) as e:
-                self.consecutive_failures += 1
-                retry_after = getattr(e, 'retry_after', self.base_delay * (2 ** self.consecutive_failures))
-                
-                logger.warning(f"⚠️ Rate limited! Attempt {self.consecutive_failures}/{self.max_consecutive_failures}")
-                logger.warning(f"⏱️ Waiting {retry_after:.0f} seconds before retry...")
-                await asyncio.sleep(min(retry_after, 300))
-                
-            except Exception as e:
-                self.consecutive_failures += 1
-                logger.error(f"💥 Connection error: {e}")
-                wait_time = min(self.base_delay * self.consecutive_failures, 120)
-                logger.info(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
-                await asyncio.sleep(wait_time)
-        
-        logger.critical("❌ Max retries reached. Could not connect to Discord.")
-        return False
-
-# Create global connection manager
-conn_manager = ConnectionManager()
 
 # ────────────────────────────────────────────────
 #   1. Load token securely
@@ -307,7 +242,7 @@ web_server_thread.start()
 logger.info(f"🌐 Web server started on port {os.environ.get('PORT', 10000)}")
 
 # ────────────────────────────────────────────────
-#   5. Hourly Role Management Task (Delayed Start)
+#   5. Hourly Role Management Task
 # ────────────────────────────────────────────────
 async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
@@ -1131,7 +1066,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   14. Profile Command (with Activity Status based on points)
+#   14. Profile Command
 # ────────────────────────────────────────────────
 @tree.command(name="profile", description="Check personnel profile by RP name")
 @app_commands.describe(roleplay_name="The roleplay name to search for")
@@ -1208,7 +1143,7 @@ async def profile_command(interaction: discord.Interaction, roleplay_name: str):
         embed.add_field(name="⚓ SeaDad", value=seadad if seadad != "None" else "Not Assigned", inline=True)
         embed.add_field(name="🌴 Leave of Absence", value=loa_status, inline=True)
         
-        # Activity Status based on points (as requested)
+        # Activity Status based on points
         if activity_points == 0:
             activity_status = "🔴 **Not Active**"
         elif activity_points < 5:
@@ -1267,25 +1202,14 @@ async def sync_command(interaction: discord.Interaction):
         await interaction.followup.send(f"Error syncing commands: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   16. Run with Connection Manager
+#   16. Run
 # ────────────────────────────────────────────────
 async def main():
-    """Main entry point with connection management"""
+    """Main entry point"""
     logger.info("🚀 Starting Discord bot...")
     
-    success = await conn_manager.connect_with_backoff(bot, TOKEN)
-    
-    if not success:
-        logger.critical("Failed to connect after all retries. Exiting.")
-        return
-    
-    try:
-        await bot.wait_until_ready()
-        logger.info("✨ Bot is ready and running!")
-        await asyncio.Event().wait()
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-        await bot.close()
+    async with bot:
+        await bot.start(TOKEN)
 
 if __name__ == "__main__":
     try:
