@@ -109,31 +109,19 @@ class ConnectionManager:
             except PrivilegedIntentsRequired as e:
                 logger.critical(f"❌ Privileged intents required: {e}")
                 logger.critical("Please enable Privileged Gateway Intents in Discord Developer Portal")
-                logger.critical("Go to: https://discord.com/developers/applications -> Your Bot -> Bot -> Enable SERVER MEMBERS INTENT and MESSAGE CONTENT INTENT")
                 return False
                 
             except (HTTPException, RateLimited) as e:
                 self.consecutive_failures += 1
-                
-                # Get retry after time if available
                 retry_after = getattr(e, 'retry_after', self.base_delay * (2 ** self.consecutive_failures))
                 
                 logger.warning(f"⚠️ Rate limited! Attempt {self.consecutive_failures}/{self.max_consecutive_failures}")
                 logger.warning(f"⏱️ Waiting {retry_after:.0f} seconds before retry...")
-                
-                await asyncio.sleep(min(retry_after, 300))  # Cap at 5 minutes
-                
-            except discord.GatewayNotFound as e:
-                self.consecutive_failures += 1
-                logger.error(f"💥 Gateway error: {e}")
-                wait_time = self.base_delay * self.consecutive_failures
-                logger.info(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
-                await asyncio.sleep(min(wait_time, 120))
+                await asyncio.sleep(min(retry_after, 300))
                 
             except Exception as e:
                 self.consecutive_failures += 1
                 logger.error(f"💥 Connection error: {e}")
-                
                 wait_time = min(self.base_delay * self.consecutive_failures, 120)
                 logger.info(f"⏱️ Waiting {wait_time:.0f} seconds before retry...")
                 await asyncio.sleep(wait_time)
@@ -319,11 +307,15 @@ web_server_thread.start()
 logger.info(f"🌐 Web server started on port {os.environ.get('PORT', 10000)}")
 
 # ────────────────────────────────────────────────
-#   5. Hourly Role Management Task
+#   5. Hourly Role Management Task (Delayed Start)
 # ────────────────────────────────────────────────
 async def hourly_role_management():
     """Check every hour and manage roles based on criteria"""
     await bot.wait_until_ready()
+    
+    # Wait 2 minutes before first run to ensure bot is fully connected
+    logger.info("⏰ Waiting 2 minutes before starting hourly role management...")
+    await asyncio.sleep(120)
     
     while not bot.is_closed():
         try:
@@ -444,7 +436,7 @@ async def hourly_role_management():
         await asyncio.sleep(3600)
 
 # ────────────────────────────────────────────────
-#   6. Ready event + command sync
+#   6. Ready event + command sync + start background tasks
 # ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -469,9 +461,9 @@ async def on_ready():
     except Exception as e:
         logger.error(f"❌ Sync failed: {e}")
     
-    # Start background tasks
+    # Start hourly role management task (delayed by 2 minutes)
     bot.loop.create_task(hourly_role_management())
-    logger.info("⏰ Started hourly role management task")
+    logger.info("⏰ Scheduled hourly role management (will start in 2 minutes)")
 
 # ────────────────────────────────────────────────
 #   7. Discharge Modal
@@ -1139,7 +1131,7 @@ async def test_connection_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Connection failed: {str(e)}", ephemeral=True)
 
 # ────────────────────────────────────────────────
-#   14. Profile Command
+#   14. Profile Command (with Activity Status based on points)
 # ────────────────────────────────────────────────
 @tree.command(name="profile", description="Check personnel profile by RP name")
 @app_commands.describe(roleplay_name="The roleplay name to search for")
@@ -1176,7 +1168,7 @@ async def profile_command(interaction: discord.Interaction, roleplay_name: str):
             embed = discord.Embed(
                 title="❌ Personnel Not Found",
                 description=f"Could not find personnel with RP name: **{roleplay_name}**\n\n"
-                           f"Please check the spelling and try again. Make sure the name matches exactly as it appears in the sheets.",
+                           f"Please check the spelling and try again.",
                 color=discord.Color.red(),
                 timestamp=datetime.now(timezone.utc)
             )
@@ -1216,25 +1208,17 @@ async def profile_command(interaction: discord.Interaction, roleplay_name: str):
         embed.add_field(name="⚓ SeaDad", value=seadad if seadad != "None" else "Not Assigned", inline=True)
         embed.add_field(name="🌴 Leave of Absence", value=loa_status, inline=True)
         
-        if activity_points > 0:
-            if activity_points < 100:
-                progression = "🟢 Junior"
-                progression_desc = "0-99 points"
-            elif activity_points < 300:
-                progression = "🔵 Intermediate"
-                progression_desc = "100-299 points"
-            elif activity_points < 600:
-                progression = "🟠 Senior"
-                progression_desc = "300-599 points"
-            else:
-                progression = "💎 Elite"
-                progression_desc = "600+ points"
-            
-            embed.add_field(
-                name="📈 Rank Progression",
-                value=f"{progression}\n*{progression_desc}*",
-                inline=False
-            )
+        # Activity Status based on points (as requested)
+        if activity_points == 0:
+            activity_status = "🔴 **Not Active**"
+        elif activity_points < 5:
+            activity_status = "🟡 **Active Enough**"
+        elif activity_points < 10:
+            activity_status = "🟢 **Decently Active**"
+        else:
+            activity_status = "💎 **Extraordinary Activity**"
+        
+        embed.add_field(name="📈 Activity Status", value=activity_status, inline=False)
         
         embed.set_footer(
             text=f"Requested by {interaction.user.display_name} • Found in {sheet_name}",
